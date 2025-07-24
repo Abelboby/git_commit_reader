@@ -243,10 +243,19 @@ if __name__ == "__main__":
     if not filtered_commits:
         print("No commits found for the specified date or range.")
         sys.exit(0)
+    # Ensure start_date and end_date are datetime.date objects
+    def to_date(val):
+        if isinstance(val, datetime.date):
+            return val
+        if isinstance(val, str):
+            return datetime.datetime.strptime(val, '%Y-%m-%d').date()
+        return None
+    use_start = start_date if start_date else to_date(filtered_commits[0]['date'])
+    use_end = end_date if end_date else to_date(filtered_commits[-1]['date'])
     analyze_commits(
         filtered_commits,
         api_key=api_key,
         repo_path=repo_path,
-        start_date=start_date if start_date else filtered_commits[0]['date'],
-        end_date=end_date if end_date else filtered_commits[-1]['date']
+        start_date=use_start,
+        end_date=use_end
     ) 
