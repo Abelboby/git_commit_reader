@@ -109,6 +109,32 @@ def extract_task_points(summary):
         points = [summary.strip()]
     return points
 
+def extract_subtasks_from_summary(summary):
+    import re
+    points = []
+    for line in summary.splitlines():
+        line = line.strip()
+        # Only extract sub-bullets, not the main summary title
+        if re.match(r'^[*-]\s+\*{0,1}[^*\-]', line):
+            # Remove leading bullet and extra formatting
+            clean = re.sub(r'^[*-]\s+', '', line).strip()
+            if clean and not clean.lower().startswith('daily work report'):
+                points.append(clean)
+    return points
+
+def generate_github_issue_tasks(points, api_key):
+    # For each point, generate a concise title and a 10-word description using Gemini
+    tasks = []
+    for point in points:
+        title_prompt = f"Rewrite this as a GitHub issue title, imperative, under 10 words: {point}"
+        desc_prompt = f"Summarize this as a 10-word description for a GitHub issue: {point}"
+        title = summarize_with_gemini([title_prompt], api_key)
+        desc = summarize_with_gemini([desc_prompt], api_key)
+        title = title.strip().split('\n')[0].strip('-*').strip()
+        desc = desc.strip().split('\n')[0].strip('-*').strip()
+        tasks.append((title, desc))
+    return tasks
+
 # Main analysis function
 def analyze_commits(commits, api_key, repo_path, start_date, end_date):
     grouped = group_commits_by_date(commits)
@@ -122,6 +148,7 @@ def analyze_commits(commits, api_key, repo_path, start_date, end_date):
     report_file = os.path.join(report_folder, f"{date_str}.md")
     output_lines = [f"# Work Summary for {repo_name} ({date_str})\n"]
     all_points = []
+    all_subtasks = []
     for date in sorted(grouped.keys()):
         messages = grouped[date]
         output_lines.append(f"## Date: {date}")
@@ -131,9 +158,20 @@ def analyze_commits(commits, api_key, repo_path, start_date, end_date):
         for msg in messages:
             output_lines.append(f"- {msg}")
         output_lines.append("")
-        # Extract points for this date
+        # Extract points for this date (for console)
         points = extract_task_points(summary)
         all_points.extend(points)
+        # Extract subtasks for GitHub issues
+        subtasks = extract_subtasks_from_summary(summary)
+        all_subtasks.extend(subtasks)
+    # If no subtasks found, fall back to points
+    if not all_subtasks:
+        all_subtasks = all_points
+    # Add GitHub Issues section
+    tasks = generate_github_issue_tasks(all_subtasks, api_key)
+    output_lines.append("## Tasks to add to GitHub Issues\n")
+    for title, desc in tasks:
+        output_lines.append(f"- **{title}**\n  - {desc}")
     output = '\n'.join(output_lines)
     with open(report_file, 'w', encoding='utf-8') as f:
         f.write(output)
@@ -192,21 +230,27 @@ def prompt_repo_path():
 def prompt_user():
     repo_path = prompt_repo_path()
     print("Select analysis type:")
-    print("1. All history")
-    print("2. Specific date")
-    print("3. Date range")
-    print("4. Today")
-    print("5. Yesterday")
+    print("1. Today")
+    print("2. Yesterday")
+    print("3. Specific date")
+    print("4. Date range")
+    print("5. All history")
     choice = input("Enter choice (1/2/3/4/5): ").strip()
     start_date = end_date = None
-    if choice == '2':
+    if choice == '1':  # Today
+        today = datetime.date.today()
+        start_date = end_date = today
+    elif choice == '2':  # Yesterday
+        yesterday = datetime.date.today() - datetime.timedelta(days=1)
+        start_date = end_date = yesterday
+    elif choice == '3':
         date_str = input("Enter date (YYYY-MM-DD): ").strip()
         try:
             start_date = end_date = datetime.datetime.strptime(date_str, '%Y-%m-%d').date()
         except Exception:
             print("Invalid date format.")
             sys.exit(1)
-    elif choice == '3':
+    elif choice == '4':
         start_str = input("Enter start date (YYYY-MM-DD): ").strip()
         end_str = input("Enter end date (YYYY-MM-DD): ").strip()
         try:
@@ -215,12 +259,7 @@ def prompt_user():
         except Exception:
             print("Invalid date format.")
             sys.exit(1)
-    elif choice == '4':  # Today
-        today = datetime.date.today()
-        start_date = end_date = today
-    elif choice == '5':  # Yesterday
-        yesterday = datetime.date.today() - datetime.timedelta(days=1)
-        start_date = end_date = yesterday
+    # else: all history (no date filtering)
     # else: all history (no date filtering)
     # Always use Gemini summary
     api_key = load_dotenv_key('GEMINI_API_KEY')
